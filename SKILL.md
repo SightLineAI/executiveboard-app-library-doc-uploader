@@ -1,135 +1,184 @@
 ---
 name: executiveboard-app-library-doc-uploader
-description: Uploads or updates Implementation Kits and other content documents in the Executive Board app library at board.sightlineaisolutions.com, and returns stable IDs/URLs for cross-linking.
+description: Creates or updates Implementation Kits and other content documents in the Executive Board™ app library (Supabase-backed), ensuring they are published, discoverable, and correctly linked from the marketing site.
 ---
 
-# Skill: Executive Board App Library Doc Uploader
+# Skill: Executive Board™ App Library Doc Uploader
 
 ## Purpose
 
-Provide a **repeatable, safe way** for Manus to publish or update content documents
-(Implementation Kits, guides, playbooks) inside the Executive Board web app at
-`https://board.sightlineaisolutions.com`, without re-describing the whole UI flow
-in every prompt.
+Provide a **repeatable, safe, database-aware** way for Manus to create or update
+content documents (Implementation Kits, guides, playbooks) in the Executive Board™
+web app at `https://board.sightlineaisolutions.com`, using the existing Supabase
+backend.
 
-This Skill handles:
+This Skill replaces ad‑hoc Supabase exploration each time with a consistent process
+that:
 
-- Logging into the Executive Board app.
-- Navigating to the content library / Implementation Kits area.
-- Creating or updating content records.
-- Returning stable identifiers (ID, slug, URL) for cross-linking from the marketing site.
+- Writes to the correct Supabase table (`kits` or successor).  
+- Sets required fields (`slug`, `title`, `content`, `metadata`, `published`).  
+- Returns stable app URLs for cross‑linking from blog posts and other surfaces.
 
 ---
 
 ## Inputs
 
-When this Skill is called, Manus should receive:
+When this Skill is called, Manus receives:
 
 - **DocType** (string, required)  
-  One of:
+  Logical type of document. One of:
   - `ImplementationKit`
   - `Guide`
   - `Playbook`
-  - (or another internal type if configured in the app)
+  - `InternalDoc`  
+  (These map into `metadata` fields; the physical table remains `kits` unless changed.)
 
 - **Title** (string, required)  
-  Human-readable title, e.g.:  
-  `"Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Create an SOP for Every Aspect of the Office Like a Pro — Without Burning Out the Team"`
+  Human-readable title shown in the Executive Board™ UI, e.g.:  
+  `Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Create an SOP for Every Aspect of the Office Like a Pro — Without Burning Out the Team`
 
 - **Slug** (string, required)  
-  URL/key-safe slug, lowercase, hyphenated, e.g.:  
-  `independent-optometry-sop-like-a-pro`
+  URL-safe identifier, lowercase, hyphenated, no spaces, e.g.:  
+  `implementation-kit-create-sop-every-aspect-office`  
+  This must be unique per kit and becomes the URL segment:  
+  `https://board.sightlineaisolutions.com/kits/{Slug}`
 
 - **MarkdownBody** (string, required)  
-  Full markdown content of the document.
+  Full markdown content of the document, including section headings, diagnostic
+  checklists, phases, and tool mapping tables.
 
 - **Summary** (string, optional)  
-  1–3 sentence summary for list views and tooltips.
+  1–3 sentence summary shown in cards or previews.
 
-- **PillarOrLane** (string, optional)  
-  One of the existing app lanes/pillars (e.g., `Operations`, `Communication Governance`,
-  `Staff Capacity`, `Marketing`, `Patient Experience`).
+- **PrimaryLane** (string, optional but strongly recommended)  
+  Primary Executive Board lane for this document, e.g.:
+  - `Marketing Governance & Campaign Operations`
+  - `Operations Governance & Documentation Infrastructure`
+  - `Communication Governance & Recall`
+  - `Staff Capacity & Onboarding`
 
 - **PracticeSizeRange** (string, optional)  
-  e.g., `1–4 locations`, `2–6 locations`, `All independent practices`.
+  Description of target practice size; examples:
+  - `1–2 locations`
+  - `2–6 locations`
+  - `All independent practices`
 
 - **Tags** (array of strings, optional)  
-  Additional internal tags, e.g.:
-  - `"Phase1"`
+  Internal tags for filtering/search, e.g.:
   - `"ImplementationKit"`
   - `"SocialMedia"`
   - `"SOPs"`
+  - `"Recall"`
+  - `"Multi-Location"`
+
+- **EstimatedImplementationWindowWeeks** (integer, optional)  
+  Typical weeks required to run the full roadmap (e.g., `8`, `10`, `12`).
 
 - **UpdateStrategy** (string, optional, default `"upsert-by-slug"`)  
-  - `"upsert-by-slug"` – if a document with this `Slug` exists, update it; otherwise create new.
-  - `"create-only"` – always create a new record; fail if slug exists.
-  - `"update-only"` – only update an existing record; fail if slug not found.
+  Controls how existing records are handled:
+  - `"upsert-by-slug"` – if a row with this `slug` exists, update it; otherwise create.  
+  - `"create-only"` – create a new row; error if `slug` already exists.  
+  - `"update-only"` – update existing row; error if `slug` does not exist.
 
 ---
 
-## Required Behavior
+## Required Database Behavior
+
+This Skill assumes content is stored in a Supabase Postgres table, currently:
+
+- Table: `kits`  
+- Key columns (as observed in the existing app):
+  - `slug` (text, primary unique identifier per kit)  
+  - `title` (text)  
+  - `content` (text, markdown)  
+  - `metadata` (jsonb)  
+  - `published` (boolean)  
+  - `created_at` / `updated_at` (timestamps, defaulted by DB)  
+
+If the schema evolves, this Skill must be updated accordingly.
 
 When Manus runs this Skill, it must:
 
-1. **Authenticate and navigate**
-   - Log into `https://board.sightlineaisolutions.com` using the stored SightLineAI
-     Executive Board credentials (do not prompt the user).
-   - Navigate to the **content library / Implementation Kits** section (or the closest
-     content area configured for these documents).
+1. **Authenticate to Supabase**
 
-2. **Apply the update strategy**
-   - If `UpdateStrategy = "upsert-by-slug"`:
-     - Search for an existing document whose slug or key matches `Slug`.
-     - If found, open it for editing; if not, start a new document.
-   - If `create-only` or `update-only`, respect those semantics and surface an error
-     if the condition can’t be met.
+   - Use the **existing Supabase project** backing `board.sightlineaisolutions.com`
+     (e.g., `https://qmzusqgmrceozcdipqwi.supabase.co` with the configured service key).  
+   - Use a role/key with permission to read and write the `kits` table, respecting
+     Row-Level Security (RLS) policies.
 
-3. **Create or update the document**
-   - Set **Title**.
-   - Set **Slug** (if editable in the UI; otherwise map to the app’s key/ID field).
-   - Paste **MarkdownBody** into the main content area, preserving headings and structure.
-   - Fill **Summary**, **PillarOrLane**, **PracticeSizeRange**, and **Tags** into their
-     respective fields if present in the UI.
-   - Save or publish the document according to the app’s normal “publish” behavior
-     (e.g., clicking “Save”, “Publish”, or similar).
+2. **Normalize inputs**
 
-4. **Return stable identifiers**
-   - After saving, capture:
-     - `DocumentID` (internal ID or GUID if visible).
-     - `Slug` (as stored in the app).
-     - `LibraryURL` (full URL to view the document inside the Executive Board app).
-   - Return these values in a short status block so other prompts (e.g., blog build
-     prompts) can link directly to the document.
+   - Trim whitespace from `Title`, `Slug`, `Summary`.  
+   - Enforce `Slug` format:
+     - Lowercase.  
+     - Spaces and special characters replaced with hyphens.  
+     - No leading/trailing hyphen.
 
-5. **Safety rules**
-   - Do **not** delete any existing documents.
-   - Only modify a document when:
-     - Its slug or unique key clearly matches the provided `Slug`, or
-     - The user explicitly requested `update-only` and you have a confident match.
-   - Do **not** change app-level configuration, user permissions, or anything outside
-     the content library area.
+3. **Resolve `metadata`**
+
+   Build a `metadata` JSON object that minimally includes:
+
+   - `doc_type`: `DocType`  
+   - `primary_lane`: `PrimaryLane` (if provided)  
+   - `practice_size_range`: `PracticeSizeRange` (if provided)  
+   - `tags`: `Tags` (array, may be empty)  
+   - `estimated_implementation_weeks`: `EstimatedImplementationWindowWeeks` (if provided)  
+
+   If an existing row is being updated, merge the new metadata onto existing metadata,
+   preserving fields that are not explicitly overwritten, unless the caller intends
+   a full overwrite.
+
+4. **Apply `UpdateStrategy`**
+
+   - `"upsert-by-slug"` (default):
+     - `SELECT` by `slug`.  
+     - If found, `UPDATE content`, `title`, `metadata`, set `published = true`,
+       and update `updated_at`.  
+     - If not found, `INSERT` a new row with `slug`, `title`, `content`, `metadata`,
+       `published = true`.
+
+   - `"create-only"`:
+     - `SELECT` by `slug`; if exists, **fail** with a clear error.  
+     - If not exists, `INSERT` as above.
+
+   - `"update-only"`:
+     - `SELECT` by `slug`; if not exists, **fail** with a clear error.  
+     - If exists, `UPDATE` as above.
+
+5. **Ensure published visibility**
+
+   - Always set `published = true` for created/updated rows unless explicitly told
+     otherwise by a future extension of this Skill.  
+   - Do not modify any other rows.
 
 ---
 
 ## Outputs
 
-After a successful run, this Skill should return (in plain text or JSON, depending on Manus conventions):
+After successful completion, the Skill must return a concise status object (plain text
+or JSON, depending on Manus conventions), including:
 
-- `Status`: `"created"` or `"updated"`.
-- `DocType`
-- `Title`
-- `Slug`
-- `DocumentID` (if available)
-- `LibraryURL` (full URL to the document in the Executive Board app)
+- `Status`: `"created"` or `"updated"`.  
+- `DocType`.  
+- `Title`.  
+- `Slug`.  
+- `PrimaryLane` (as stored in metadata).  
+- `PracticeSizeRange` (if present).  
+- `EstimatedImplementationWindowWeeks` (if present).  
+- `DocumentID` (internal DB id if available).  
+- `LibraryURL`: `https://board.sightlineaisolutions.com/kits/{Slug}`  
 
-Example JSON-style response:
+### Example Output
 
 ```json
 {
   "Status": "created",
   "DocType": "ImplementationKit",
   "Title": "Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Create an SOP for Every Aspect of the Office Like a Pro — Without Burning Out the Team",
-  "Slug": "independent-optometry-sop-like-a-pro",
+  "Slug": "implementation-kit-create-sop-every-aspect-office",
+  "PrimaryLane": "Operations Governance & Documentation Infrastructure",
+  "PracticeSizeRange": "1–6 locations",
+  "EstimatedImplementationWindowWeeks": 12,
   "DocumentID": "kit_abc123",
-  "LibraryURL": "https://board.sightlineaisolutions.com/kits/independent-optometry-sop-like-a-pro"
+  "LibraryURL": "https://board.sightlineaisolutions.com/kits/implementation-kit-create-sop-every-aspect-office"
 }
