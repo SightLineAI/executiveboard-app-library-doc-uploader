@@ -1,184 +1,183 @@
 ---
 name: executiveboard-app-library-doc-uploader
-description: Creates or updates Implementation Kits and other content documents in the Executive Board™ app library (Supabase-backed), ensuring they are published, discoverable, and correctly linked from the marketing site.
+description: Creates or updates Executive Board™ Implementation Kits in the Supabase-backed library, including week metadata and symptom-action mappings.
 ---
 
-# Skill: Executive Board™ App Library Doc Uploader
+# Skill: Executive Board™ App Library Doc Uploader (Updated)
 
 ## Purpose
 
-Provide a **repeatable, safe, database-aware** way for Manus to create or update
-content documents (Implementation Kits, guides, playbooks) in the Executive Board™
-web app at `https://board.sightlineaisolutions.com`, using the existing Supabase
-backend.
+Provide a **single, safe entry point** for Manus to write Implementation Kits and
+related metadata into the Executive Board™ app backend, including:
 
-This Skill replaces ad‑hoc Supabase exploration each time with a consistent process
-that:
+- Rewritten kit markdown.  
+- Week‑by‑week metadata for the UI stepper.  
+- Symptom → action rows for the playbook table.  
+- Time estimates and multi‑location flags.
 
-- Writes to the correct Supabase table (`kits` or successor).  
-- Sets required fields (`slug`, `title`, `content`, `metadata`, `published`).  
-- Returns stable app URLs for cross‑linking from blog posts and other surfaces.
+All kit content changes should go through this Skill.
+
+---
+
+## Data Model Assumptions
+
+Supabase table:
+
+- **Table:** `kits`
+
+Columns:
+
+- `slug` (text, unique, primary key)  
+- `title` (text)  
+- `content` (text, markdown)  
+- `metadata` (jsonb)  
+- `published` (boolean)  
+- `created_at` (timestamp)  
+- `updated_at` (timestamp)
+
+`metadata` fields used by this Skill:
+
+- `doc_type` (e.g., `ImplementationKit`)  
+- `primary_lane`  
+- `practice_size_range`  
+- `tags` (array of strings)  
+- `estimated_time_first_day` (integer, minutes)  
+- `total_weeks` (integer)  
+- `weeks` (array; see format below)  
+- `symptom_action_rows` (array)  
+- `has_multi_location_section` (boolean)
+
+Other metadata keys must be preserved if already present.
 
 ---
 
 ## Inputs
 
-When this Skill is called, Manus receives:
+Manus must supply:
 
 - **DocType** (string, required)  
-  Logical type of document. One of:
-  - `ImplementationKit`
-  - `Guide`
-  - `Playbook`
-  - `InternalDoc`  
-  (These map into `metadata` fields; the physical table remains `kits` unless changed.)
+  e.g. `ImplementationKit`.
 
 - **Title** (string, required)  
-  Human-readable title shown in the Executive Board™ UI, e.g.:  
-  `Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Create an SOP for Every Aspect of the Office Like a Pro — Without Burning Out the Team`
+  Display title for the kit.
 
 - **Slug** (string, required)  
-  URL-safe identifier, lowercase, hyphenated, no spaces, e.g.:  
-  `implementation-kit-create-sop-every-aspect-office`  
-  This must be unique per kit and becomes the URL segment:  
-  `https://board.sightlineaisolutions.com/kits/{Slug}`
+  URL slug for the kit. Lowercase, hyphenated, unique.
 
-- **MarkdownBody** (string, required)  
-  Full markdown content of the document, including section headings, diagnostic
-  checklists, phases, and tool mapping tables.
+- **RewrittenKitMarkdown** (string, required)  
+  Full markdown from the Implementation Kit Rewriter.
 
-- **Summary** (string, optional)  
-  1–3 sentence summary shown in cards or previews.
-
-- **PrimaryLane** (string, optional but strongly recommended)  
-  Primary Executive Board lane for this document, e.g.:
-  - `Marketing Governance & Campaign Operations`
-  - `Operations Governance & Documentation Infrastructure`
-  - `Communication Governance & Recall`
-  - `Staff Capacity & Onboarding`
+- **PrimaryLane** (string, required)  
+  e.g. `Marketing Governance & Campaign Operations`.
 
 - **PracticeSizeRange** (string, optional)  
-  Description of target practice size; examples:
-  - `1–2 locations`
-  - `2–6 locations`
-  - `All independent practices`
+  e.g. `1–6 locations`.
 
 - **Tags** (array of strings, optional)  
-  Internal tags for filtering/search, e.g.:
-  - `"ImplementationKit"`
-  - `"SocialMedia"`
-  - `"SOPs"`
-  - `"Recall"`
-  - `"Multi-Location"`
+  e.g. `["ImplementationKit", "Social Media"]`.
 
-- **EstimatedImplementationWindowWeeks** (integer, optional)  
-  Typical weeks required to run the full roadmap (e.g., `8`, `10`, `12`).
+- **EstimatedTimeFirstDayMinutes** (integer, required)  
+  e.g. `30`.
 
-- **UpdateStrategy** (string, optional, default `"upsert-by-slug"`)  
-  Controls how existing records are handled:
-  - `"upsert-by-slug"` – if a row with this `slug` exists, update it; otherwise create.  
-  - `"create-only"` – create a new row; error if `slug` already exists.  
-  - `"update-only"` – update existing row; error if `slug` does not exist.
+- **TotalWeeks** (integer, required)  
+  e.g. `10`.
 
----
+- **WeekMetadataJSON** (string, required)  
+  JSON string conforming to the `weeks` specification from the rewriter Skill.
 
-## Required Database Behavior
+- **SymptomActionRowsJSON** (string, required)  
+  JSON string with `symptom_action_rows` entries.
 
-This Skill assumes content is stored in a Supabase Postgres table, currently:
+- **HasMultiLocationSection** (boolean, optional; default `false`)  
 
-- Table: `kits`  
-- Key columns (as observed in the existing app):
-  - `slug` (text, primary unique identifier per kit)  
-  - `title` (text)  
-  - `content` (text, markdown)  
-  - `metadata` (jsonb)  
-  - `published` (boolean)  
-  - `created_at` / `updated_at` (timestamps, defaulted by DB)  
-
-If the schema evolves, this Skill must be updated accordingly.
-
-When Manus runs this Skill, it must:
-
-1. **Authenticate to Supabase**
-
-   - Use the **existing Supabase project** backing `board.sightlineaisolutions.com`
-     (e.g., `https://qmzusqgmrceozcdipqwi.supabase.co` with the configured service key).  
-   - Use a role/key with permission to read and write the `kits` table, respecting
-     Row-Level Security (RLS) policies.
-
-2. **Normalize inputs**
-
-   - Trim whitespace from `Title`, `Slug`, `Summary`.  
-   - Enforce `Slug` format:
-     - Lowercase.  
-     - Spaces and special characters replaced with hyphens.  
-     - No leading/trailing hyphen.
-
-3. **Resolve `metadata`**
-
-   Build a `metadata` JSON object that minimally includes:
-
-   - `doc_type`: `DocType`  
-   - `primary_lane`: `PrimaryLane` (if provided)  
-   - `practice_size_range`: `PracticeSizeRange` (if provided)  
-   - `tags`: `Tags` (array, may be empty)  
-   - `estimated_implementation_weeks`: `EstimatedImplementationWindowWeeks` (if provided)  
-
-   If an existing row is being updated, merge the new metadata onto existing metadata,
-   preserving fields that are not explicitly overwritten, unless the caller intends
-   a full overwrite.
-
-4. **Apply `UpdateStrategy`**
-
-   - `"upsert-by-slug"` (default):
-     - `SELECT` by `slug`.  
-     - If found, `UPDATE content`, `title`, `metadata`, set `published = true`,
-       and update `updated_at`.  
-     - If not found, `INSERT` a new row with `slug`, `title`, `content`, `metadata`,
-       `published = true`.
-
-   - `"create-only"`:
-     - `SELECT` by `slug`; if exists, **fail** with a clear error.  
-     - If not exists, `INSERT` as above.
-
-   - `"update-only"`:
-     - `SELECT` by `slug`; if not exists, **fail** with a clear error.  
-     - If exists, `UPDATE` as above.
-
-5. **Ensure published visibility**
-
-   - Always set `published = true` for created/updated rows unless explicitly told
-     otherwise by a future extension of this Skill.  
-   - Do not modify any other rows.
+- **UpdateStrategy** (string, optional; default `"upsert-by-slug"`)  
+  - `"upsert-by-slug"` – update if slug exists; create if not.  
+  - `"create-only"` – create only; error if slug exists.  
+  - `"update-only"` – update only; error if slug does not exist.
 
 ---
 
-## Outputs
+## Behavior
 
-After successful completion, the Skill must return a concise status object (plain text
-or JSON, depending on Manus conventions), including:
+### 1. Authenticate to Supabase
 
-- `Status`: `"created"` or `"updated"`.  
-- `DocType`.  
-- `Title`.  
-- `Slug`.  
-- `PrimaryLane` (as stored in metadata).  
-- `PracticeSizeRange` (if present).  
-- `EstimatedImplementationWindowWeeks` (if present).  
-- `DocumentID` (internal DB id if available).  
-- `LibraryURL`: `https://board.sightlineaisolutions.com/kits/{Slug}`  
+- Use the existing Supabase project backing `board.sightlineaisolutions.com`.  
+- Use a key/role that can read and write the `kits` table and obey RLS.
 
-### Example Output
+### 2. Normalize and Validate Inputs
 
+- Trim whitespace from `Title` and `Slug`.  
+- Ensure `Slug` is lowercase, hyphenated, with no spaces.  
+- Parse `WeekMetadataJSON` and `SymptomActionRowsJSON` as JSON.  
+- Validate that `weeks` is an array and `symptom_action_rows` is an array; if not, fail with a clear error.
+
+### 3. Construct Metadata
+
+Build a new metadata object:
+
+```json
+{
+  "doc_type": "ImplementationKit",
+  "primary_lane": "... from PrimaryLane ...",
+  "practice_size_range": "... from PracticeSizeRange ...",
+  "tags": ["ImplementationKit", "..."],
+  "estimated_time_first_day": 30,
+  "total_weeks": 10,
+  "weeks": [...],
+  "symptom_action_rows": [...],
+  "has_multi_location_section": true
+}
+```
+If an existing metadata JSON already exists for this slug:
+Load the current metadata.
+Overwrite the keys listed above.
+Preserve any other keys to avoid losing unrelated data.
+4. Apply UpdateStrategy
+Look up any existing row with this slug.
+"upsert-by-slug" (default):
+If row exists:
+UPDATE that row:
+title ← Title
+content ← RewrittenKitMarkdown
+metadata ← merged metadata
+published ← true
+updated_at ← now
+If no row:
+INSERT a new row with:
+slug, title, content, metadata, published = true.
+"create-only":
+If row exists → return an error (no changes).
+Else perform the same insert as above.
+"update-only":
+If no row exists → return an error.
+Else perform the same update as in upsert.
+All operations must be limited to the single matching row.
+5. Ensure Published Visibility
+Always set published = true on the target row.
+Do not change published values on any other row.
+
+Outputs
+Return a JSON status object like:
 ```json
 {
   "Status": "created",
   "DocType": "ImplementationKit",
-  "Title": "Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Create an SOP for Every Aspect of the Office Like a Pro — Without Burning Out the Team",
-  "Slug": "implementation-kit-create-sop-every-aspect-office",
-  "PrimaryLane": "Operations Governance & Documentation Infrastructure",
+  "Title": "Executive Board™ Implementation Kit – How an Independent Optometry Practice Can Run Social Media Like a Pro — Without Burning Out the Team",
+  "Slug": "implementation-kit-run-social-media-like-a-pro",
+  "PrimaryLane": "Marketing Governance & Campaign Operations",
   "PracticeSizeRange": "1–6 locations",
-  "EstimatedImplementationWindowWeeks": 12,
+  "EstimatedTimeFirstDayMinutes": 30,
+  "TotalWeeks": 10,
+  "HasMultiLocationSection": true,
   "DocumentID": "kit_abc123",
-  "LibraryURL": "https://board.sightlineaisolutions.com/kits/implementation-kit-create-sop-every-aspect-office"
+  "LibraryURL": "https://board.sightlineaisolutions.com/kits/implementation-kit-run-social-media-like-a-pro"
 }
+```
+Use "Status": "updated" when appropriate.
+
+Safety Rules
+Never delete rows.
+Never alter Supabase config, RLS, or unrelated tables.
+Do not silently change slugs; if a slug must be altered to meet format rules, fail and report instead.
+On any constraint or RLS error, return a clear error message and leave data unchanged.
+
